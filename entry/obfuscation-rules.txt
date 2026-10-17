@@ -1,0 +1,9 @@
+-keep-file-name
+entryability/EntryAbility.ets
+
+-keep-property-name
+transfer
+missingBlobs
+id
+status
+error

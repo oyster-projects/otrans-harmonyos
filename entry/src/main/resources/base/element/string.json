@@ -1,0 +1,8 @@
+{
+  "string": [
+    { "name": "module_desc", "value": "OTrans 跨设备中转站" },
+    { "name": "entry_ability_desc", "value": "OTrans 主页面" },
+    { "name": "entry_ability_label", "value": "OTrans" },
+    { "name": "permission_pasteboard_reason", "value": "用于在你打开 OTrans 时读取当前剪贴板，并在确认后上传到自己的飞牛 NAS。" }
+  ]
+}
