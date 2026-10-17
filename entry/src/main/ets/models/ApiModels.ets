@@ -60,6 +60,24 @@ export interface ServerInfo {
   protocolVersion: number;
 }
 
+export interface PeerSource {
+  deviceId: string;
+  deviceName: string;
+  addresses: string[];
+  ticket: string;
+  expiresAt: string;
+}
+
+export interface PeerSourcesResponse {
+  sources: PeerSource[];
+}
+
+export interface BlobDownloadResult {
+  content: ArrayBuffer;
+  route: string;
+  sourceName?: string;
+}
+
 export interface LocalTransferFile {
   uri: string;
   name: string;

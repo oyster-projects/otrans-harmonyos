@@ -3,11 +3,13 @@ import { http } from '@kit.NetworkKit';
 import { cryptoFramework } from '@kit.CryptoArchitectureKit';
 import { util } from '@kit.ArkTS';
 import {
+  BlobDownloadResult,
   CreateTransferResponse,
   Device,
   ErrorResponse,
   LocalTransferFile,
   PairResponse,
+  PeerSourcesResponse,
   PreparedTransferFile,
   ServerInfo,
   Transfer,
@@ -125,18 +127,71 @@ export class OTransApi {
         throw new Error(`下载失败，服务返回 ${response.responseCode}`);
       }
       const content = response.result as ArrayBuffer;
-      if (content.byteLength !== item.size) {
-        throw new Error(`${item.name} 文件大小校验失败`);
-      }
-      const md = cryptoFramework.createMd('SHA256');
-      await md.update({ data: new Uint8Array(content) });
-      const digest = this.toHex((await md.digest()).data);
-      if (digest !== item.sha256.toLowerCase()) {
-        throw new Error(`${item.name} 完整性校验失败`);
-      }
+      await this.validateBlob(content, item);
       return content;
     } finally {
       request.destroy();
+    }
+  }
+
+  async downloadBlobPreferLan(item: TransferItem): Promise<BlobDownloadResult> {
+    if (!item.sha256 || !item.name || item.size === undefined) {
+      throw new Error('文件记录不完整');
+    }
+    try {
+      const peers = await this.request<PeerSourcesResponse>(
+        `/api/v1/lan/sources/${encodeURIComponent(item.sha256)}`, http.RequestMethod.GET
+      );
+      for (const source of peers.sources) {
+        for (const address of source.addresses) {
+          try {
+            const url = address.replace(/\/+$/, '') +
+              `/v1/blobs/${encodeURIComponent(item.sha256)}?ticket=${encodeURIComponent(source.ticket)}`;
+            const content = await this.downloadPeerBlob(url, item);
+            return { content: content, route: 'lan', sourceName: source.deviceName };
+          } catch (_) {
+            // 地址可能因休眠、换网或防火墙失效，继续尝试并最终回退飞牛。
+          }
+        }
+      }
+    } catch (_) {
+      // 兼容尚未提供局域网发现接口的旧服务端。
+    }
+    return { content: await this.downloadBlob(item), route: 'nas' };
+  }
+
+  private async downloadPeerBlob(url: string, item: TransferItem): Promise<ArrayBuffer> {
+    const request = http.createHttp();
+    try {
+      const response = await request.request(url, {
+        method: http.RequestMethod.GET,
+        expectDataType: http.HttpDataType.ARRAY_BUFFER,
+        connectTimeout: 1800,
+        readTimeout: 180000
+      });
+      if (response.responseCode < 200 || response.responseCode >= 300) {
+        throw new Error(`局域网设备返回 ${response.responseCode}`);
+      }
+      const content = response.result as ArrayBuffer;
+      await this.validateBlob(content, item);
+      return content;
+    } finally {
+      request.destroy();
+    }
+  }
+
+  private async validateBlob(content: ArrayBuffer, item: TransferItem): Promise<void> {
+    if (!item.sha256 || !item.name || item.size === undefined) {
+      throw new Error('文件记录不完整');
+    }
+    if (content.byteLength !== item.size) {
+      throw new Error(`${item.name} 文件大小校验失败`);
+    }
+    const md = cryptoFramework.createMd('SHA256');
+    await md.update({ data: new Uint8Array(content) });
+    const digest = this.toHex((await md.digest()).data);
+    if (digest !== item.sha256.toLowerCase()) {
+      throw new Error(`${item.name} 完整性校验失败`);
     }
   }
 

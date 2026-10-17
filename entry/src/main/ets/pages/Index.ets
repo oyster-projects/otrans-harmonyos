@@ -2,7 +2,7 @@ import { common } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { connection } from '@kit.NetworkKit';
 import { util } from '@kit.ArkTS';
-import { AppSettings, Device, LocalTransferFile, Transfer, TransferItem } from '../models/ApiModels';
+import { AppSettings, BlobDownloadResult, Device, LocalTransferFile, Transfer, TransferItem } from '../models/ApiModels';
 import { ClipboardService } from '../services/ClipboardService';
 import { FileSelectionService } from '../services/FileSelectionService';
 import { FileDownloadService } from '../services/FileDownloadService';
@@ -318,16 +318,20 @@ struct Index {
         return;
       }
       let api = await this.resolveApi();
-      let content: ArrayBuffer;
+      let download: BlobDownloadResult;
       try {
-        content = await api.downloadBlob(item);
+        download = await api.downloadBlobPreferLan(item);
       } catch (_) {
         this.activeServerUrl = '';
         api = await this.resolveApi(true);
-        content = await api.downloadBlob(item);
+        download = await api.downloadBlobPreferLan(item);
       }
-      FileDownloadService.write(destination, content);
-      this.showToast(`${item.name || '文件'} 已保存`);
+      FileDownloadService.write(destination, download.content);
+      if (download.route === 'lan') {
+        this.showToast(`${item.name || '文件'} 已从 ${download.sourceName || '局域网设备'} 直传保存`);
+      } else {
+        this.showToast(`${item.name || '文件'} 已从飞牛保存`);
+      }
     } catch (error) {
       const cause = error as BusinessError;
       if (cause.code !== 13900042) {
