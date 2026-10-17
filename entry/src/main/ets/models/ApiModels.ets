@@ -86,6 +86,12 @@ export interface LocalTransferFile {
   isImage: boolean;
 }
 
+export interface TransferInputContent {
+  texts: string[];
+  files: LocalTransferFile[];
+  unsupportedCount: number;
+}
+
 export interface PreparedTransferFile extends LocalTransferFile {
   sha256: string;
 }

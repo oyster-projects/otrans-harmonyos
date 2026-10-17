@@ -1,14 +1,25 @@
 import { common } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
+import { unifiedDataChannel } from '@kit.ArkData';
+import { fileIo as fs, fileUri } from '@kit.CoreFileKit';
 import { connection } from '@kit.NetworkKit';
 import { util } from '@kit.ArkTS';
-import { AppSettings, BlobDownloadResult, Device, LocalTransferFile, Transfer, TransferItem } from '../models/ApiModels';
+import {
+  AppSettings,
+  BlobDownloadResult,
+  Device,
+  LocalTransferFile,
+  Transfer,
+  TransferInputContent,
+  TransferItem
+} from '../models/ApiModels';
 import { ClipboardService } from '../services/ClipboardService';
 import { FileSelectionService } from '../services/FileSelectionService';
 import { FileDownloadService } from '../services/FileDownloadService';
 import { OTransApi } from '../services/OTransApi';
 import { EndpointSelector } from '../services/EndpointSelector';
 import { SettingsService } from '../services/SettingsService';
+import { TransferInputService } from '../services/TransferInputService';
 
 @Entry
 @ComponentV2
@@ -25,10 +36,11 @@ struct Index {
   @Local isReading: boolean = false;
   @Local isUploading: boolean = false;
   @Local isSelectingFiles: boolean = false;
-  @Local isUploadingFiles: boolean = false;
+  @Local isDropActive: boolean = false;
+  @Local isLoadingDrop: boolean = false;
   @Local isPairing: boolean = false;
-  @Local statusText: string = '打开应用后会读取一次当前剪贴板';
-  @Local fileStatusText: string = '可一次选择最多 9 张图片或文件';
+  @Local statusText: string = '可读取剪贴板，或从系统中转站拖入内容';
+  @Local fileStatusText: string = '文本、图片与文件可以组成一条中转记录';
   @Local selectedFiles: LocalTransferFile[] = [];
   @Local transfers: Transfer[] = [];
   @Local currentDeviceId: string = '';
@@ -139,9 +151,9 @@ struct Index {
     }
     this.isReading = true;
     try {
-      const text = await ClipboardService.readText(this.getContext());
-      this.clipboardText = text;
-      this.statusText = text.length > 0 ? '已读取当前剪贴板，请确认后上传' : '当前剪贴板没有可用文本';
+      const content = await ClipboardService.readContent(this.getContext());
+      const count = this.mergeInputContent(content, true);
+      this.statusText = count > 0 ? `已从剪贴板加入 ${count} 项，请确认后发送` : '当前剪贴板没有支持的内容';
     } catch (error) {
       const cause = error as BusinessError;
       this.statusText = cause.message || '读取剪贴板失败';
@@ -161,25 +173,60 @@ struct Index {
     }
   }
 
-  private async uploadText(): Promise<void> {
-    if (this.clipboardText.trim().length === 0 || this.isUploading) {
+  private draftItemCount(): number {
+    return this.selectedFiles.length + (this.clipboardText.trim().length > 0 ? 1 : 0);
+  }
+
+  private mergeInputContent(content: TransferInputContent, replaceText: boolean = false): number {
+    const available = FileSelectionService.maxSelectedItems() - this.selectedFiles.length;
+    const knownUris = new Set<string>(this.selectedFiles.map((file: LocalTransferFile) => file.uri));
+    const incomingFiles = content.files.filter((file: LocalTransferFile) => !knownUris.has(file.uri)).slice(0, available);
+    this.selectedFiles = this.selectedFiles.concat(incomingFiles);
+    const incomingText = content.texts.map((value: string) => value.trim())
+      .filter((value: string) => value.length > 0).join('\n\n');
+    if (incomingText.length > 0) {
+      if (replaceText || this.clipboardText.trim().length === 0) {
+        this.clipboardText = incomingText;
+      } else if (this.clipboardText.trim() !== incomingText) {
+        this.clipboardText = `${this.clipboardText.trim()}\n\n${incomingText}`;
+      }
+    } else if (replaceText) {
+      this.clipboardText = '';
+    }
+    const added = incomingFiles.length + (incomingText.length > 0 ? 1 : 0);
+    const skipped = content.unsupportedCount + Math.max(0, content.files.length - incomingFiles.length);
+    this.fileStatusText = skipped > 0 ? `已加入 ${added} 项，另有 ${skipped} 项不支持或超过数量限制` :
+      `待发送 ${this.draftItemCount()} 项`;
+    return added;
+  }
+
+  private async uploadDraft(): Promise<void> {
+    if (this.draftItemCount() === 0 || this.isUploading) {
       return;
     }
     this.isUploading = true;
-    this.statusText = '正在上传…';
+    this.statusText = '正在发送待发送内容…';
     const clientTransferId = util.generateRandomUUID();
     try {
       await this.persistSettings();
       let api = await this.resolveApi();
       try {
-        await api.createTextTransfer(this.clipboardText, clientTransferId);
+        await api.createMixedTransfer(this.clipboardText, this.selectedFiles, (message: string) => {
+          this.fileStatusText = message;
+        }, clientTransferId);
       } catch (_) {
         this.activeServerUrl = '';
         api = await this.resolveApi(true);
-        await api.createTextTransfer(this.clipboardText, clientTransferId);
+        await api.createMixedTransfer(this.clipboardText, this.selectedFiles, (message: string) => {
+          this.fileStatusText = message;
+        }, clientTransferId);
       }
-      this.statusText = '已上传到中转站';
-      this.showToast('上传成功');
+      const count = this.draftItemCount();
+      this.clipboardText = '';
+      this.selectedFiles = [];
+      this.statusText = `已发送 ${count} 项到中转站`;
+      this.fileStatusText = '文本、图片与文件可以组成一条中转记录';
+      this.showToast('待发送内容已上传');
       await this.refreshTransfers(false);
     } catch (error) {
       const cause = error as Error;
@@ -211,8 +258,8 @@ struct Index {
       const knownUris = new Set<string>(this.selectedFiles.map((file: LocalTransferFile) => file.uri));
       const appended = selected.filter((file: LocalTransferFile) => !knownUris.has(file.uri));
       this.selectedFiles = this.selectedFiles.concat(appended).slice(0, FileSelectionService.maxSelectedItems());
-      this.fileStatusText = this.selectedFiles.length > 0 ?
-        `已选择 ${this.selectedFiles.length} 项，确认后上传` : '尚未选择图片或文件';
+      this.fileStatusText = this.draftItemCount() > 0 ? `待发送 ${this.draftItemCount()} 项` :
+        '文本、图片与文件可以组成一条中转记录';
     } catch (error) {
       const cause = error as BusinessError;
       this.fileStatusText = cause.message || '选择文件失败';
@@ -226,40 +273,60 @@ struct Index {
     const next = this.selectedFiles.slice();
     next.splice(index, 1);
     this.selectedFiles = next;
-    this.fileStatusText = next.length > 0 ? `已选择 ${next.length} 项，确认后上传` : '尚未选择图片或文件';
+    this.fileStatusText = this.draftItemCount() > 0 ? `待发送 ${this.draftItemCount()} 项` :
+      '文本、图片与文件可以组成一条中转记录';
   }
 
-  private async uploadFiles(): Promise<void> {
-    if (this.selectedFiles.length === 0 || this.isUploadingFiles) {
-      return;
-    }
-    this.isUploadingFiles = true;
-    const clientTransferId = util.generateRandomUUID();
+  private handleDrop(event: DragEvent): void {
+    this.isDropActive = false;
+    this.isLoadingDrop = true;
+    this.fileStatusText = '正在接收拖入内容…';
     try {
-      await this.persistSettings();
-      let api = await this.resolveApi();
+      const directory = `${this.getContext().distributedFilesDir}/otrans-drop-${util.generateRandomUUID()}`;
+      fs.mkdirSync(directory, true);
+      const listener: unifiedDataChannel.DataProgressListener =
+        (progress: unifiedDataChannel.ProgressInfo, data: unifiedDataChannel.UnifiedData | null): void => {
+          if (data !== null && progress.progress >= 100) {
+            void this.acceptDroppedData(data);
+          } else if (progress.progress >= 0) {
+            this.fileStatusText = `正在接收拖入内容：${progress.progress}%`;
+          } else {
+            this.isLoadingDrop = false;
+            this.fileStatusText = '拖入内容读取失败';
+          }
+        };
+      event.startDataLoading({
+        destUri: fileUri.getUriFromPath(directory),
+        fileConflictOptions: unifiedDataChannel.FileConflictOptions.OVERWRITE,
+        progressIndicator: unifiedDataChannel.ProgressIndicator.DEFAULT,
+        dataProgressListener: listener
+      });
+      event.setResult(DragResult.DRAG_SUCCESSFUL);
+    } catch (error) {
       try {
-        await api.createFileTransfer(this.selectedFiles, (message: string) => {
-          this.fileStatusText = message;
-        }, clientTransferId);
+        void this.acceptDroppedData(event.getData());
+        event.setResult(DragResult.DRAG_SUCCESSFUL);
       } catch (_) {
-        this.activeServerUrl = '';
-        api = await this.resolveApi(true);
-        await api.createFileTransfer(this.selectedFiles, (message: string) => {
-          this.fileStatusText = message;
-        }, clientTransferId);
+        const cause = error as BusinessError;
+        this.isLoadingDrop = false;
+        this.fileStatusText = cause.message || '拖入内容读取失败';
+        event.setResult(DragResult.DRAG_FAILED);
+        this.showToast(this.fileStatusText);
       }
-      const count = this.selectedFiles.length;
-      this.selectedFiles = [];
-      this.fileStatusText = `已上传 ${count} 项到中转站`;
-      this.showToast('图片和文件上传成功');
-      await this.refreshTransfers(false);
+    }
+  }
+
+  private async acceptDroppedData(data: unifiedDataChannel.UnifiedData): Promise<void> {
+    try {
+      const content = await TransferInputService.parse(this.getContext(), data, false);
+      const count = this.mergeInputContent(content);
+      this.showToast(count > 0 ? `已加入 ${count} 项拖入内容` : '拖入内容中没有支持的文本或文件');
     } catch (error) {
       const cause = error as Error;
-      this.fileStatusText = cause.message || '文件上传失败';
+      this.fileStatusText = cause.message || '拖入内容读取失败';
       this.showToast(this.fileStatusText);
     } finally {
-      this.isUploadingFiles = false;
+      this.isLoadingDrop = false;
     }
   }
 
@@ -461,74 +528,83 @@ struct Index {
       }
       .width('100%')
 
-      Column({ space: 12 }) {
-        Row() {
-          Text('当前剪贴板')
-            .fontSize(18)
-            .fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.text_primary'))
-          Blank()
-          if (this.isReading) {
-            LoadingProgress().width(22).height(22).color($r('app.color.primary'))
-          }
-        }
-        .width('100%')
-
-        TextArea({ text: this.clipboardText, placeholder: '复制一段文字后返回 OTrans' })
-          .height(170)
-          .width('100%')
-          .fontSize(16)
-          .backgroundColor($r('app.color.page_background'))
-          .borderRadius(14)
-          .padding(14)
-          .onChange((value: string) => { this.clipboardText = value; })
-
-        Text(this.statusText)
-          .fontSize(13)
-          .fontColor($r('app.color.text_secondary'))
-          .width('100%')
-
-        Button(this.isUploading ? '上传中…' : '上传到中转站')
-          .width('100%')
-          .height(48)
-          .fontSize(16)
-          .enabled(!this.isUploading && this.clipboardText.trim().length > 0)
-          .backgroundColor($r('app.color.primary'))
-          .onClick(() => { void this.uploadText(); })
-      }
-      .width('100%')
-      .padding(18)
-      .borderRadius(22)
-      .backgroundColor($r('app.color.card_background'))
-
         Column({ space: 12 }) {
           Row() {
             Column({ space: 3 }) {
-              Text('图片与文件')
+              Text('待发送内容')
                 .fontSize(18)
                 .fontWeight(FontWeight.Medium)
                 .fontColor($r('app.color.text_primary'))
-              Text('单文件最大 128 MiB')
+              Text('从系统中转站拖到这里，支持文本、图片和多文件混合')
                 .fontSize(12)
                 .fontColor($r('app.color.text_secondary'))
             }
             .alignItems(HorizontalAlign.Start)
             Blank()
-            if (this.isSelectingFiles) {
+            if (this.isSelectingFiles || this.isLoadingDrop || this.isReading) {
               LoadingProgress().width(22).height(22).color($r('app.color.primary'))
             }
           }
           .width('100%')
 
+          Column({ space: 7 }) {
+            Text(this.isDropActive ? '松手即可加入待发送内容' : '拖入文本、照片、视频或文件')
+              .fontSize(15)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(this.isDropActive ? $r('app.color.primary') : $r('app.color.text_primary'))
+            Text('拖入后不会立即上传，可以继续添加并确认')
+              .fontSize(12)
+              .fontColor($r('app.color.text_secondary'))
+          }
+          .justifyContent(FlexAlign.Center)
+          .width('100%')
+          .height(92)
+          .borderRadius(14)
+          .border({
+            width: this.isDropActive ? 2 : 1,
+            color: this.isDropActive ? $r('app.color.primary') : $r('app.color.text_secondary'),
+            style: BorderStyle.Dashed
+          })
+          .backgroundColor($r('app.color.page_background'))
+
+          TextArea({ text: this.clipboardText, placeholder: '输入文本，或点击“读取剪贴板”' })
+            .height(130)
+            .width('100%')
+            .fontSize(16)
+            .backgroundColor($r('app.color.page_background'))
+            .borderRadius(14)
+            .padding(14)
+            .onChange((value: string) => {
+              this.clipboardText = value;
+              this.fileStatusText = this.draftItemCount() > 0 ? `待发送 ${this.draftItemCount()} 项` :
+                '文本、图片与文件可以组成一条中转记录';
+            })
+
           Row({ space: 10 }) {
+            Button('读取剪贴板')
+              .layoutWeight(1)
+              .enabled(!this.isReading)
+              .onClick(() => { void this.refreshClipboard(); })
             Button('选择图片')
               .layoutWeight(1)
               .enabled(!this.isSelectingFiles && this.selectedFiles.length < FileSelectionService.maxSelectedItems())
               .onClick(() => { void this.selectPhotos(); })
+          }
+          .width('100%')
+
+          Row({ space: 10 }) {
             Button('选择文件')
               .layoutWeight(1)
               .enabled(!this.isSelectingFiles && this.selectedFiles.length < FileSelectionService.maxSelectedItems())
               .onClick(() => { void this.selectDocuments(); })
+            Button('清空')
+              .layoutWeight(1)
+              .enabled(this.draftItemCount() > 0 && !this.isUploading)
+              .onClick(() => {
+                this.clipboardText = '';
+                this.selectedFiles = [];
+                this.fileStatusText = '文本、图片与文件可以组成一条中转记录';
+              })
           }
           .width('100%')
 
@@ -573,18 +649,30 @@ struct Index {
             .fontColor($r('app.color.text_secondary'))
             .width('100%')
 
-          Button(this.isUploadingFiles ? '上传中…' : '上传所选内容')
+          Text(this.statusText)
+            .fontSize(13)
+            .fontColor($r('app.color.text_secondary'))
+            .width('100%')
+
+          Button(this.isUploading ? '发送中…' : `发送全部内容（${this.draftItemCount()} 项）`)
             .width('100%')
             .height(48)
             .fontSize(16)
-            .enabled(!this.isUploadingFiles && this.selectedFiles.length > 0)
+            .enabled(!this.isUploading && this.draftItemCount() > 0)
             .backgroundColor($r('app.color.primary'))
-            .onClick(() => { void this.uploadFiles(); })
+            .onClick(() => { void this.uploadDraft(); })
         }
         .width('100%')
         .padding(18)
         .borderRadius(22)
         .backgroundColor($r('app.color.card_background'))
+        .onDragEnter((event: DragEvent) => {
+          this.isDropActive = true;
+          event.setResult(DragResult.DROP_ENABLED);
+        })
+        .onDragMove((event: DragEvent) => { event.setResult(DragResult.DROP_ENABLED); })
+        .onDragLeave((_event: DragEvent) => { this.isDropActive = false; })
+        .onDrop((event: DragEvent) => { this.handleDrop(event); }, { disableDataPrefetch: true })
 
         Column({ space: 12 }) {
           Row() {

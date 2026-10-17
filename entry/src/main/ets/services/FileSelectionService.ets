@@ -3,7 +3,7 @@ import { fileIo as fs, picker } from '@kit.CoreFileKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { LocalTransferFile } from '../models/ApiModels';
 
-const MAX_SELECTED_ITEMS: number = 9;
+const MAX_SELECTED_ITEMS: number = 63;
 const MAX_FILE_BYTES: number = 128 * 1024 * 1024;
 
 export class FileSelectionService {
@@ -35,7 +35,7 @@ export class FileSelectionService {
     return MAX_FILE_BYTES;
   }
 
-  private static describeUris(uris: string[], isImage: boolean): LocalTransferFile[] {
+  static describeUris(uris: string[], imageHint: boolean = false): LocalTransferFile[] {
     const files: LocalTransferFile[] = [];
     for (const uri of uris) {
       const file = fs.openSync(uri, fs.OpenMode.READ_ONLY);
@@ -44,12 +44,13 @@ export class FileSelectionService {
         if (stat.size > MAX_FILE_BYTES) {
           throw new Error(`${file.name} 超过手机端单文件 128 MiB 限制`);
         }
+        const mimeType = FileSelectionService.mimeTypeFor(file.name, imageHint);
         files.push({
           uri: uri,
           name: FileSelectionService.safeFileName(file.name),
-          mimeType: FileSelectionService.mimeTypeFor(file.name, isImage),
+          mimeType: mimeType,
           size: stat.size,
-          isImage: isImage
+          isImage: mimeType.startsWith('image/')
         });
       } finally {
         fs.closeSync(file);
@@ -58,7 +59,7 @@ export class FileSelectionService {
     return files;
   }
 
-  private static safeFileName(name: string): string {
+  static safeFileName(name: string): string {
     let safe = name.trim().replace(/[\\\/:*?"<>|\u0000]/g, '_').replace(/[. ]+$/g, '');
     if (safe.length === 0) {
       safe = '未命名文件';
@@ -66,7 +67,7 @@ export class FileSelectionService {
     return safe.length > 200 ? safe.substring(0, 200) : safe;
   }
 
-  private static mimeTypeFor(name: string, isImage: boolean): string {
+  static mimeTypeFor(name: string, imageHint: boolean = false): string {
     const dot = name.lastIndexOf('.');
     const extension = dot >= 0 ? name.substring(dot + 1).toLowerCase() : '';
     switch (extension) {
@@ -106,8 +107,18 @@ export class FileSelectionService {
         return 'application/vnd.ms-powerpoint';
       case 'pptx':
         return 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+      case 'mp4':
+        return 'video/mp4';
+      case 'mov':
+        return 'video/quicktime';
+      case 'mkv':
+        return 'video/x-matroska';
+      case 'mp3':
+        return 'audio/mpeg';
+      case 'wav':
+        return 'audio/wav';
       default:
-        return isImage ? 'image/*' : 'application/octet-stream';
+        return imageHint ? 'image/*' : 'application/octet-stream';
     }
   }
 }

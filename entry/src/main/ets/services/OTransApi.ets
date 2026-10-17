@@ -66,32 +66,7 @@ export class OTransApi {
   }
 
   async createTextTransfer(text: string, clientTransferId: string = util.generateRandomUUID()): Promise<Transfer> {
-    this.ensureServerUrl();
-    if (this.token.length === 0) {
-      throw new Error('请先填写设备令牌');
-    }
-    const createBody: CreateTransferRequest = {
-      clientTransferId: clientTransferId,
-      title: '来自 HarmonyOS 剪贴板',
-      items: [{ kind: 'text', text: text, mimeType: 'text/plain' }]
-    };
-    let created: CreateTransferResponse;
-    try {
-      created = await this.request<CreateTransferResponse>(
-        '/api/v1/transfers', http.RequestMethod.POST, JSON.stringify(createBody)
-      );
-    } catch (error) {
-      const cause = error as Error;
-      throw new Error(`创建中转记录失败：${cause.message}`);
-    }
-    try {
-      return await this.request<Transfer>(
-        `/api/v1/transfers/${created.transfer.id}/commit`, http.RequestMethod.POST
-      );
-    } catch (error) {
-      const cause = error as Error;
-      throw new Error(`提交中转记录失败：${cause.message}`);
-    }
+    return this.createMixedTransfer(text, [], (_message: string): void => {}, clientTransferId);
   }
 
   async getDevice(): Promise<Device> {
@@ -197,12 +172,21 @@ export class OTransApi {
 
   async createFileTransfer(files: LocalTransferFile[], onProgress: (message: string) => void,
     clientTransferId: string = util.generateRandomUUID()): Promise<Transfer> {
+    return this.createMixedTransfer('', files, onProgress, clientTransferId);
+  }
+
+  async createMixedTransfer(text: string, files: LocalTransferFile[], onProgress: (message: string) => void,
+    clientTransferId: string = util.generateRandomUUID()): Promise<Transfer> {
     this.ensureServerUrl();
     if (this.token.length === 0) {
       throw new Error('请先填写设备令牌');
     }
-    if (files.length === 0) {
-      throw new Error('请先选择图片或文件');
+    const normalizedText = text.trim();
+    if (files.length === 0 && normalizedText.length === 0) {
+      throw new Error('请先添加文本、图片或文件');
+    }
+    if (files.length + (normalizedText.length > 0 ? 1 : 0) > 64) {
+      throw new Error('一条中转记录最多包含 64 项');
     }
 
     const prepared: PreparedTransferFile[] = [];
@@ -220,6 +204,9 @@ export class OTransApi {
     }
 
     const items: TransferItemRequest[] = [];
+    if (normalizedText.length > 0) {
+      items.push({ kind: 'text', text: normalizedText, mimeType: 'text/plain' });
+    }
     for (const file of prepared) {
       const item: TransferItemRequest = {
         kind: 'file',
@@ -230,9 +217,18 @@ export class OTransApi {
       };
       items.push(item);
     }
+    let title: string;
+    if (prepared.length === 0) {
+      title = '来自 HarmonyOS 的文本';
+    } else if (normalizedText.length > 0) {
+      title = `来自 HarmonyOS：文本和 ${prepared.length} 个文件`;
+    } else {
+      title = prepared.length === 1 ? `来自 HarmonyOS：${prepared[0].name}` :
+        `来自 HarmonyOS 的 ${prepared.length} 个文件`;
+    }
     const createBody: CreateTransferRequest = {
       clientTransferId: clientTransferId,
-      title: prepared.length === 1 ? `来自 HarmonyOS：${prepared[0].name}` : `来自 HarmonyOS 的 ${prepared.length} 个文件`,
+      title: title,
       items: items
     };
 
@@ -243,7 +239,7 @@ export class OTransApi {
       );
     } catch (error) {
       const cause = error as Error;
-      throw new Error(`创建文件中转记录失败：${cause.message}`);
+      throw new Error(`创建中转记录失败：${cause.message}`);
     }
 
     try {
@@ -263,7 +259,7 @@ export class OTransApi {
       );
     } catch (error) {
       const cause = error as Error;
-      throw new Error(`上传文件失败：${cause.message}`);
+      throw new Error(`提交中转内容失败：${cause.message}`);
     }
   }
 

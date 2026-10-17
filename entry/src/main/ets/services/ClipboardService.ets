@@ -1,5 +1,7 @@
 import { abilityAccessCtrl, bundleManager, common } from '@kit.AbilityKit';
 import { pasteboard } from '@kit.BasicServicesKit';
+import { TransferInputContent } from '../models/ApiModels';
+import { TransferInputService } from './TransferInputService';
 
 type ClipboardPermission = 'ohos.permission.READ_PASTEBOARD';
 
@@ -29,6 +31,15 @@ export class ClipboardService {
       return '';
     }
     return data.getPrimaryText();
+  }
+
+  static async readContent(context: common.UIAbilityContext): Promise<TransferInputContent> {
+    const granted = await ClipboardService.ensurePermission(context);
+    if (!granted) {
+      throw new Error('未获得剪贴板读取权限');
+    }
+    const data = await pasteboard.getSystemPasteboard().getUnifiedData();
+    return TransferInputService.parse(context, data, true);
   }
 
   private static async ensurePermission(context: common.UIAbilityContext): Promise<boolean> {
