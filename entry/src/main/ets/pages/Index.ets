@@ -39,6 +39,7 @@ struct Index {
   @Local isDropActive: boolean = false;
   @Local isLoadingDrop: boolean = false;
   @Local isPairing: boolean = false;
+  @Local isSettingsOpen: boolean = false;
   @Local statusText: string = '可读取剪贴板，或从系统中转站拖入内容';
   @Local fileStatusText: string = '文本、图片与文件可以组成一条中转记录';
   @Local selectedFiles: LocalTransferFile[] = [];
@@ -488,6 +489,7 @@ struct Index {
       await this.persistSettings();
       this.pairCode = '';
       this.statusText = `已配对：${paired.device.name}`;
+      this.isSettingsOpen = false;
       this.showToast('配对成功');
       await this.refreshTransfers(false);
     } catch (error) {
@@ -506,9 +508,99 @@ struct Index {
     }
   }
 
+  @Builder
+  private settingsPage() {
+    Column({ space: 0 }) {
+      Row({ space: 12 }) {
+        Button('返回')
+          .type(ButtonType.Capsule)
+          .onClick(() => { this.isSettingsOpen = false; })
+        Column({ space: 2 }) {
+          Text('设置')
+            .fontSize(24)
+            .fontWeight(FontWeight.Bold)
+            .fontColor($r('app.color.text_primary'))
+          Text('飞牛连接与设备配对')
+            .fontSize(12)
+            .fontColor($r('app.color.text_secondary'))
+        }
+        .alignItems(HorizontalAlign.Start)
+        Blank()
+      }
+      .width('100%')
+      .padding({ left: 18, right: 18, top: 18, bottom: 14 })
+      .backgroundColor($r('app.color.card_background'))
+
+      Scroll() {
+        Column({ space: 12 }) {
+          Text('连接地址')
+            .fontSize(18)
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.text_primary'))
+            .width('100%')
+          Text(this.routeStatusText)
+            .fontSize(12)
+            .fontColor($r('app.color.text_secondary'))
+            .width('100%')
+          TextInput({ text: this.lanServerUrl, placeholder: '内网地址：http://192.168.1.10:18990' })
+            .width('100%')
+            .onChange((value: string) => {
+              this.lanServerUrl = value;
+              this.activeServerUrl = '';
+            })
+          TextInput({ text: this.wanServerUrl, placeholder: '外网地址（可选）：https://你的域名' })
+            .width('100%')
+            .onChange((value: string) => {
+              this.wanServerUrl = value;
+              this.activeServerUrl = '';
+            })
+          TextInput({ text: this.deviceName, placeholder: '设备名称' })
+            .width('100%')
+            .onChange((value: string) => { this.deviceName = value; })
+
+          Divider().margin({ top: 4, bottom: 4 })
+
+          Text('设备配对')
+            .fontSize(18)
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.text_primary'))
+            .width('100%')
+          TextInput({ text: this.pairCode, placeholder: '10 分钟内有效的配对码' })
+            .width('100%')
+            .onChange((value: string) => { this.pairCode = value; })
+          Button(this.isPairing ? '配对中…' : '使用配对码连接')
+            .width('100%')
+            .enabled(!this.isPairing && this.pairCode.trim().length > 0)
+            .onClick(() => { void this.pairDevice(); })
+          TextInput({ text: this.deviceToken, placeholder: '设备令牌' })
+            .type(InputType.Password)
+            .width('100%')
+            .onChange((value: string) => { this.deviceToken = value; })
+          Button('保存连接信息')
+            .width('100%')
+            .onClick(() => { void this.saveSettings(); })
+
+          Text('令牌只保存在本机；内网可用时优先走内网，失败后自动切换外网。')
+            .fontSize(12)
+            .fontColor($r('app.color.text_secondary'))
+            .width('100%')
+        }
+        .width('100%')
+        .padding(18)
+      }
+      .layoutWeight(1)
+      .width('100%')
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor($r('app.color.page_background'))
+    .zIndex(10)
+  }
+
   build() {
-    Scroll() {
-      Column({ space: 18 }) {
+    Stack() {
+      Scroll() {
+        Column({ space: 18 }) {
       Row() {
         Column({ space: 4 }) {
           Text('OTrans')
@@ -521,10 +613,9 @@ struct Index {
         }
         .alignItems(HorizontalAlign.Start)
         Blank()
-        Button('重新读取')
+        Button('设置')
           .type(ButtonType.Capsule)
-          .enabled(!this.isReading)
-          .onClick(() => { void this.refreshClipboard(); })
+          .onClick(() => { this.isSettingsOpen = true; })
       }
       .width('100%')
 
@@ -786,58 +877,20 @@ struct Index {
         .borderRadius(22)
         .backgroundColor($r('app.color.card_background'))
 
-        Column({ space: 12 }) {
-        Text('飞牛连接')
-          .fontSize(18)
-          .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.text_primary'))
-          .width('100%')
-        Text(this.routeStatusText)
-          .fontSize(12)
-          .fontColor($r('app.color.text_secondary'))
-          .width('100%')
-        TextInput({ text: this.lanServerUrl, placeholder: '内网地址：http://192.168.1.10:18990' })
-          .width('100%')
-          .onChange((value: string) => {
-            this.lanServerUrl = value;
-            this.activeServerUrl = '';
-          })
-        TextInput({ text: this.wanServerUrl, placeholder: '外网地址（可选）：https://你的域名' })
-          .width('100%')
-          .onChange((value: string) => {
-            this.wanServerUrl = value;
-            this.activeServerUrl = '';
-          })
-        TextInput({ text: this.deviceName, placeholder: '设备名称' })
-          .width('100%')
-          .onChange((value: string) => { this.deviceName = value; })
-        TextInput({ text: this.pairCode, placeholder: '10 分钟内有效的配对码' })
-          .width('100%')
-          .onChange((value: string) => { this.pairCode = value; })
-        Button(this.isPairing ? '配对中…' : '使用配对码连接')
-          .width('100%')
-          .enabled(!this.isPairing && this.pairCode.trim().length > 0)
-          .onClick(() => { void this.pairDevice(); })
-        TextInput({ text: this.deviceToken, placeholder: '设备令牌' })
-          .type(InputType.Password)
-          .width('100%')
-          .onChange((value: string) => { this.deviceToken = value; })
-        Button('保存连接信息')
-          .width('100%')
-          .onClick(() => { void this.saveSettings(); })
+          Blank().height(8)
+        }
+        .width('100%')
+        .padding({ left: 18, right: 18, top: 24, bottom: 18 })
       }
       .width('100%')
-      .padding(18)
-      .borderRadius(22)
-      .backgroundColor($r('app.color.card_background'))
+      .height('100%')
+      .backgroundColor($r('app.color.page_background'))
 
-        Blank().height(8)
+      if (this.isSettingsOpen) {
+        this.settingsPage()
       }
-      .width('100%')
-      .padding({ left: 18, right: 18, top: 24, bottom: 18 })
     }
     .width('100%')
     .height('100%')
-    .backgroundColor($r('app.color.page_background'))
   }
 }
