@@ -137,16 +137,22 @@ export class TransferInputService {
 
   private static copyToInputCache(context: common.UIAbilityContext, sourceUri: string): string {
     const source = fs.openSync(sourceUri, fs.OpenMode.READ_ONLY);
-    let name: string;
     try {
-      name = FileSelectionService.safeFileName(source.name);
+      const name = FileSelectionService.safeFileName(source.name);
+      const directory = TransferInputService.ensureInputDirectory(context);
+      const destination = `${directory}/${util.generateRandomUUID()}-${name}`;
+      const output = fs.openSync(destination,
+        fs.OpenMode.CREATE | fs.OpenMode.WRITE_ONLY | fs.OpenMode.TRUNC);
+      try {
+        // FileUri 不是文件系统路径。源文件保持打开，并通过 FD 复制，才能读取中转站授予的临时 URI。
+        fs.copyFileSync(source.fd, output.fd);
+      } finally {
+        fs.closeSync(output);
+      }
+      return fileUri.getUriFromPath(destination);
     } finally {
       fs.closeSync(source);
     }
-    const directory = TransferInputService.ensureInputDirectory(context);
-    const destination = `${directory}/${util.generateRandomUUID()}-${name}`;
-    fs.copyFileSync(sourceUri, destination);
-    return fileUri.getUriFromPath(destination);
   }
 
   private static ensureInputDirectory(context: common.UIAbilityContext): string {
