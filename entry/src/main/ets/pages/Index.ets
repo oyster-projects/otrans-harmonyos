@@ -1,7 +1,6 @@
 import { common } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
-import { unifiedDataChannel } from '@kit.ArkData';
-import { fileIo as fs, fileUri } from '@kit.CoreFileKit';
+import { unifiedDataChannel, uniformTypeDescriptor } from '@kit.ArkData';
 import { connection } from '@kit.NetworkKit';
 import { util } from '@kit.ArkTS';
 import {
@@ -283,43 +282,22 @@ struct Index {
     this.isLoadingDrop = true;
     this.fileStatusText = '正在接收拖入内容…';
     try {
-      const directory = `${this.getContext().distributedFilesDir}/otrans-drop-${util.generateRandomUUID()}`;
-      fs.mkdirSync(directory, true);
-      const listener: unifiedDataChannel.DataProgressListener =
-        (progress: unifiedDataChannel.ProgressInfo, data: unifiedDataChannel.UnifiedData | null): void => {
-          if (data !== null && progress.progress >= 100) {
-            void this.acceptDroppedData(data);
-          } else if (progress.progress >= 0) {
-            this.fileStatusText = `正在接收拖入内容：${progress.progress}%`;
-          } else {
-            this.isLoadingDrop = false;
-            this.fileStatusText = '拖入内容读取失败';
-          }
-        };
-      event.startDataLoading({
-        destUri: fileUri.getUriFromPath(directory),
-        fileConflictOptions: unifiedDataChannel.FileConflictOptions.OVERWRITE,
-        progressIndicator: unifiedDataChannel.ProgressIndicator.DEFAULT,
-        dataProgressListener: listener
-      });
+      const data = event.getData();
       event.setResult(DragResult.DRAG_SUCCESSFUL);
+      void this.acceptDroppedData(data);
     } catch (error) {
-      try {
-        void this.acceptDroppedData(event.getData());
-        event.setResult(DragResult.DRAG_SUCCESSFUL);
-      } catch (_) {
-        const cause = error as BusinessError;
-        this.isLoadingDrop = false;
-        this.fileStatusText = cause.message || '拖入内容读取失败';
-        event.setResult(DragResult.DRAG_FAILED);
-        this.showToast(this.fileStatusText);
-      }
+      const cause = error as BusinessError;
+      this.isLoadingDrop = false;
+      this.fileStatusText = cause.message || '拖入内容读取失败';
+      event.setResult(DragResult.DRAG_FAILED);
+      this.showToast(this.fileStatusText);
     }
   }
 
   private async acceptDroppedData(data: unifiedDataChannel.UnifiedData): Promise<void> {
     try {
-      const content = await TransferInputService.parse(this.getContext(), data, false);
+      // 拖拽源授予的 URI 访问权限可能只在本次拖拽期间有效，立即复制到应用缓存。
+      const content = await TransferInputService.parse(this.getContext(), data, true);
       const count = this.mergeInputContent(content);
       this.showToast(count > 0 ? `已加入 ${count} 项拖入内容` : '拖入内容中没有支持的文本或文件');
     } catch (error) {
@@ -657,6 +635,33 @@ struct Index {
             style: BorderStyle.Dashed
           })
           .backgroundColor($r('app.color.page_background'))
+          .allowDrop([
+            uniformTypeDescriptor.UniformDataType.PLAIN_TEXT,
+            uniformTypeDescriptor.UniformDataType.HTML,
+            uniformTypeDescriptor.UniformDataType.HYPERLINK,
+            uniformTypeDescriptor.UniformDataType.FILE_URI,
+            uniformTypeDescriptor.UniformDataType.FILE,
+            uniformTypeDescriptor.UniformDataType.IMAGE,
+            uniformTypeDescriptor.UniformDataType.VIDEO,
+            uniformTypeDescriptor.UniformDataType.AUDIO,
+            uniformTypeDescriptor.UniformDataType.OPENHARMONY_PIXEL_MAP
+          ])
+          .onDragEnter((event: DragEvent) => {
+            this.isDropActive = true;
+            this.fileStatusText = '已识别拖入内容，松手即可加入';
+            event.setResult(DragResult.DROP_ENABLED);
+          })
+          .onDragMove((event: DragEvent) => {
+            this.isDropActive = true;
+            event.setResult(DragResult.DROP_ENABLED);
+          })
+          .onDragLeave((event: DragEvent) => {
+            this.isDropActive = false;
+            this.fileStatusText = this.draftItemCount() > 0 ? `待发送 ${this.draftItemCount()} 项` :
+              '文本、图片与文件可以组成一条中转记录';
+            event.setResult(DragResult.DROP_ENABLED);
+          })
+          .onDrop((event: DragEvent) => { this.handleDrop(event); })
 
           TextArea({ text: this.clipboardText, placeholder: '输入文本，或点击“读取剪贴板”' })
             .height(130)
@@ -757,13 +762,6 @@ struct Index {
         .padding(18)
         .borderRadius(22)
         .backgroundColor($r('app.color.card_background'))
-        .onDragEnter((event: DragEvent) => {
-          this.isDropActive = true;
-          event.setResult(DragResult.DROP_ENABLED);
-        })
-        .onDragMove((event: DragEvent) => { event.setResult(DragResult.DROP_ENABLED); })
-        .onDragLeave((_event: DragEvent) => { this.isDropActive = false; })
-        .onDrop((event: DragEvent) => { this.handleDrop(event); }, { disableDataPrefetch: true })
 
         Column({ space: 12 }) {
           Row() {
