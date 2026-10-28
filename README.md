@@ -37,3 +37,7 @@ $env:DEVECO_SDK_HOME = 'C:\Program Files\Huawei\DevEco Studio\sdk'
 当前由飞牛端管理页创建一次性配对码。手机端进入前台时拉取最近 100 条有效中转记录，并支持按需保存和全局删除；它不会在后台持续下载或监听剪贴板。
 
 当前 HarmonyOS 端只作为局域网直传接收方，不在手机上开放文件服务端口；因此 Windows 到手机可走局域网直连，手机发送到 Windows 仍从飞牛下载。无论实际下载路径如何，文件都会先上传飞牛，记录和全局删除语义保持一致。
+
+## 许可证
+
+本项目采用 [MIT License](LICENSE)。
